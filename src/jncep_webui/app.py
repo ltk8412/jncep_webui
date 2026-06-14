@@ -20,6 +20,7 @@ from flask import (
     Response,
     jsonify,
     make_response,
+    redirect,
     render_template,
     request,
     send_file,
@@ -33,7 +34,9 @@ from jncep.jncweb import BadWebURLError
 from loguru import logger
 from waitress import serve
 
+from jncep_webui.database import get_session, init_db
 from jncep_webui.logger_setup import setup_logging
+from jncep_webui.models import DownloadHistory
 
 # TODO(naruzosa): Make test cases
 # https://github.com/NaruZosa/jncep_webui/issues/2
@@ -76,6 +79,7 @@ class JNovelFormData:
 
 # Initialize Flask application
 app = Flask(__name__)
+init_db()
 
 
 @final
@@ -122,12 +126,14 @@ def generate_epub_files(
             is_extract_content=False,
             is_not_replace_chars=False,
             style_css_path=None,
-            namegen_rules=None,
+            name_generator=None,
         )
 
         # The jncep CLI wrapper expects email_nina/password in kwargs
+        kwargs = generation_options._asdict()
+        kwargs["namegen_rules"] = kwargs.pop("name_generator")
         generate_epub.callback(
-            **generation_options._asdict(),
+            **kwargs,
             jnc_url_or_index=request_specs.jnovelclub_url,
             email=jnc_user.email,
             password=jnc_user.password,
@@ -270,25 +276,30 @@ def health_check() -> Response:
 
 @app.route("/")
 def homepage() -> str:
-    """Handle requests for the homepage.
+    """Handle requests for the homepage, including download history.
 
     Returns:
         homepage(render_template): Render the homepage.
 
     """
     logger.info(f"Homepage requested by {request.remote_addr}")
-    return render_template("Homepage.html")
+    with get_session() as session:
+        history = session.query(DownloadHistory).order_by(DownloadHistory.created_at.desc()).all()
+    return render_template("Homepage.html", history=history)
 
 
 @app.route("/epub", methods=["GET", "POST"])
 def download_epub() -> Response:
-    """Handle EPUB download requests.
+    """Handle EPUB download requests with configurable destinations.
+
+    Query params:
+        jnovelclub_url (str): J-Novel Club series/volume/part URL.
+        prepub_parts (str, optional): Part range specifier.
+        save_to_server (str, optional): "on" to save to /downloads/ (default: on).
+        download_to_client (str, optional): "on" to send file to browser (default: off).
 
     Returns:
-        Response: The requested EPUB file or a ZIP archive if multiple files.
-
-    Raises:
-        TerminateRequestError: A TerminateRequestError is raised if there is an error generating the EPUB files.
+        Response: File download, redirect to homepage, or error response.
 
     """
     logger.info(f"EPUB request initiated by {request.remote_addr}")
@@ -300,6 +311,9 @@ def download_epub() -> Response:
         raise TerminateRequestError(message="jnovelclub_url is missing from the request", status_code=500) from exception
 
     jnc_user = get_credentials(request.args)
+    save_to_server = request.args.get("save_to_server", "on") == "on"
+    download_to_client = request.args.get("download_to_client") == "on"
+
     with tempfile.TemporaryDirectory() as output_dir:
         output_path = Path(output_dir)
         generate_epub_files(
@@ -309,17 +323,69 @@ def download_epub() -> Response:
         )
         file_obj, filename, mimetype = prepare_epub_download(output_path)
 
-    logger.info(f"Sending EPUB: {filename}")
-    return send_file(
-        file_obj,
-        download_name=filename,
-        mimetype=mimetype,
-        as_attachment=True,
-    )
+        # Extract title from filename: "Series_Name_Volume_4.epub" → "Series_Name"
+        title = Path(filename).stem.split("_Volume_")[0]
+
+        with get_session() as session:
+            session.add(DownloadHistory(
+                title=title,
+                jnovelclub_url=jnc_form_data.jnovelclub_url,
+                prepub_parts=jnc_form_data.prepub_parts,
+                output_filenames=filename,
+                saved_to_server=save_to_server,
+                downloaded_to_client=download_to_client,
+            ))
+            session.commit()
+
+        if save_to_server:
+            server_dir = Path("/downloads")
+            _ = server_dir.mkdir(parents=True, exist_ok=True)
+            _ = (server_dir / filename).write_bytes(file_obj.getvalue())
+            _ = file_obj.seek(0)
+
+        if download_to_client:
+            logger.info(f"Sending EPUB: {filename}")
+            return send_file(
+                file_obj,
+                download_name=filename,
+                mimetype=mimetype,
+                as_attachment=True,
+            )
+
+    return redirect("/")
+
+
+@app.route("/epub/delete/<int:download_id>", methods=["POST"])
+def delete_download(download_id: int) -> Response:
+    """Delete a download history entry and its server-side file.
+
+    Args:
+        download_id (int): The DownloadHistory row ID to delete.
+
+    Returns:
+        Response: Redirect to homepage.
+
+    """
+    with get_session() as session:
+        entry = session.get(DownloadHistory, download_id)
+        if entry is None:
+            error_msg = "Download entry not found"
+            raise TerminateRequestError(error_msg, 404)
+
+        if entry.saved_to_server:
+            file_path = Path("/downloads") / entry.output_filenames
+            if file_path.exists():
+                file_path.unlink()
+
+        session.delete(entry)
+        session.commit()
+
+    return redirect("/")
 
 
 def main() -> None:
-    """Register sigterm handling, set up logging and serve the app."""
+    """Register sigterm handling, set up logging, initialize DB and serve the app."""
     _ = signal.signal(signal.SIGTERM, terminate)
     setup_logging()
+    init_db()
     serve(app, host="0.0.0.0", port=5000)  # noqa: S104
