@@ -355,6 +355,42 @@ def download_epub() -> Response:
     return redirect("/")
 
 
+@app.route("/epub/download/<int:download_id>", methods=["GET"])
+def download_from_server(download_id: int) -> Response:
+    """Serve a previously saved file from the server.
+
+    Args:
+        download_id (int): The DownloadHistory row ID.
+
+    Returns:
+        Response: File download or error response.
+
+    """
+    with get_session() as session:
+        entry = session.get(DownloadHistory, download_id)
+        if entry is None:
+            error_msg = "Download entry not found"
+            raise TerminateRequestError(error_msg, 404)
+
+        if not entry.saved_to_server:
+            error_msg = "Entry was not saved to the server"
+            raise TerminateRequestError(error_msg, 404)
+
+        file_path = Path("/downloads") / entry.output_filenames
+        if not file_path.exists():
+            error_msg = "File not found on server"
+            raise TerminateRequestError(error_msg, 404)
+
+        mimetype = "application/zip" if file_path.suffix == ".zip" else "application/epub+zip"
+        logger.info(f"Sending saved file from server: {entry.output_filenames}")
+        return send_file(
+            file_path,
+            download_name=entry.output_filenames,
+            mimetype=mimetype,
+            as_attachment=True,
+        )
+
+
 @app.route("/epub/delete/<int:download_id>", methods=["POST"])
 def delete_download(download_id: int) -> Response:
     """Delete a download history entry and its server-side file.

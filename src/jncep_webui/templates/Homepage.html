@@ -73,6 +73,9 @@
 							<td>{{ "✓" if entry.saved_to_server else "—" }}</td>
 							<td>{{ entry.created_at.strftime("%Y-%m-%d %H:%M") }}</td>
 							<td class="actions-cell">
+								{% if entry.saved_to_server %}
+								<a class="download-btn" href="{{ url_for('download_from_server', download_id=entry.id) }}">Download</a>
+								{% endif %}
 								<button class="fill-btn" data-url="{{ entry.jnovelclub_url }}" data-parts="{{ entry.prepub_parts or '' }}" onclick="document.getElementById('JNC_URL').value=this.dataset.url;document.getElementById('JNC_PARTS').value=this.dataset.parts">Fill</button>
 								<form action="/epub/delete/{{ entry.id }}" method="POST" style="display:inline;">
 									<button type="submit" class="delete-btn" onclick="return confirm('Delete this entry and its file?')">Delete</button>
