@@ -9,6 +9,7 @@ import re
 import signal
 import sys
 import tempfile
+import threading
 import types
 import zipfile
 from dataclasses import dataclass
@@ -49,7 +50,8 @@ from jncep_webui.paths import DOWNLOADS_DIR
 
 
 JNC_URL_PATTERN = re.compile(
-    r"^https://j-novel\.club/(read|series)/[a-z0-9-]+", re.IGNORECASE,
+    r"^https://j-novel\.club/(read|series)/[a-z0-9-]+",
+    re.IGNORECASE,
 )
 
 
@@ -193,7 +195,9 @@ def prepare_epub_download(directory: Path) -> tuple[BytesIO, str, str]:
 
 
 def _validate_credentials_pair(
-    email: str | None, password: str | None, context: str,
+    email: str | None,
+    password: str | None,
+    context: str,
 ) -> JNCUser | None:
     """Validate email/password pair consistency.
 
@@ -301,73 +305,153 @@ def homepage() -> str:
 
 @app.route("/epub", methods=["GET", "POST"])
 def download_epub() -> Response:
-    """Handle EPUB download requests with configurable destinations.
+    """Queue an EPUB download job to run in the background.
+
+    The request returns immediately with the job ID; generation happens in a
+    worker thread so the server stays responsive. Poll /epub/status/<id> for
+    progress and download the finished file from /epub/download/<id>.
 
     Query params:
         jnovelclub_url (str): J-Novel Club series/volume/part URL.
         prepub_parts (str, optional): Part range specifier.
-        save_to_server (str, optional): "on" to save to the server's downloads directory (default: on).
-        download_to_client (str, optional): "on" to send file to browser (default: off).
 
     Returns:
-        Response: File download, redirect to homepage, or error response.
+        Response: 202 JSON with the queued download_id, or an error response.
 
     """
     logger.info(f"EPUB request initiated by {request.remote_addr}")
 
     try:
         jnc_form_data = JNovelFormData(
-            request.args["jnovelclub_url"], request.args.get("prepub_parts", ""),
+            request.args["jnovelclub_url"],
+            request.args.get("prepub_parts", ""),
         )
     except KeyError as exception:
         logger.exception("jnovelclub_url is missing from the request")
         raise TerminateRequestError(
-            message="jnovelclub_url is missing from the request", status_code=500,
+            message="jnovelclub_url is missing from the request",
+            status_code=500,
         ) from exception
 
     jnc_user = get_credentials(request.args)
-    save_to_server = request.args.get("save_to_server", "on") == "on"
-    download_to_client = request.args.get("download_to_client") == "on"
 
-    with tempfile.TemporaryDirectory() as output_dir:
-        output_path = Path(output_dir)
-        generate_epub_files(
-            jnc_user,
-            jnc_form_data,
-            output_path,
+    with get_session() as session:
+        entry = DownloadHistory(
+            title="",
+            jnovelclub_url=jnc_form_data.jnovelclub_url,
+            prepub_parts=jnc_form_data.prepub_parts,
+            output_filenames="",
+            saved_to_server=True,
+            downloaded_to_client=False,
+            status="running",
         )
-        file_obj, filename, mimetype = prepare_epub_download(output_path)
+        session.add(entry)
+        session.commit()
+        download_id = entry.id
+
+    worker = threading.Thread(
+        target=run_download_job,
+        args=(download_id, jnc_user, jnc_form_data),
+        name=f"epub-job-{download_id}",
+        daemon=True,
+    )
+    worker.start()
+
+    logger.info(f"Queued EPUB job {download_id} in background thread")
+    response = jsonify({"download_id": download_id, "status": "running"})
+    response.status_code = 202
+    return response
+
+
+def run_download_job(
+    download_id: int,
+    jnc_user: JNCUser,
+    jnc_form_data: JNovelFormData,
+) -> None:
+    """Generate EPUBs in a background thread and record the result.
+
+    Args:
+        download_id (int): The DownloadHistory row ID to update.
+        jnc_user (JNCUser): J-Novel Club user credentials.
+        jnc_form_data (JNovelFormData): J-Novel Club resource URL and part specification.
+
+    """
+    with app.app_context():  # jsonify() in TerminateRequestError needs an app context
+        _run_download_job(download_id, jnc_user, jnc_form_data)
+
+
+def _run_download_job(
+    download_id: int,
+    jnc_user: JNCUser,
+    jnc_form_data: JNovelFormData,
+) -> None:
+    """Run a single background EPUB generation job, updating the DB on completion."""
+    logger.info(f"Background job {download_id} started")
+    with get_session() as session:
+        entry = session.get(DownloadHistory, download_id)
+        if entry is None:  # Row deleted while queued
+            return
+
+    try:
+        with tempfile.TemporaryDirectory() as output_dir:
+            output_path = Path(output_dir)
+            generate_epub_files(jnc_user, jnc_form_data, output_path)
+            file_obj, filename, _mimetype = prepare_epub_download(output_path)
+
+            with get_session() as session:
+                entry = session.get(DownloadHistory, download_id)
+                if entry is None:  # Row deleted while job was running
+                    logger.info(f"Background job {download_id} cancelled: row deleted")
+                    return
+            _ = (DOWNLOADS_DIR / filename).write_bytes(file_obj.getvalue())
 
         # Extract title from filename: "Series_Name_Volume_4.epub" → "Series_Name"
         title = Path(filename).stem.split("_Volume_")[0]
-
         with get_session() as session:
-            session.add(
-                DownloadHistory(
-                    title=title,
-                    jnovelclub_url=jnc_form_data.jnovelclub_url,
-                    prepub_parts=jnc_form_data.prepub_parts,
-                    output_filenames=filename,
-                    saved_to_server=save_to_server,
-                    downloaded_to_client=download_to_client,
-                ),
-            )
-            session.commit()
+            entry = session.get(DownloadHistory, download_id)
+            if entry is not None:
+                entry.title = title
+                entry.output_filenames = filename
+                entry.status = "completed"
+                entry.error_message = None
+                session.commit()
+        logger.info(f"Background job {download_id} completed: {filename}")
+    except Exception as exception:  # noqa: BLE001 — record any failure in the DB
+        logger.exception(f"Background job {download_id} failed")
+        with get_session() as session:
+            entry = session.get(DownloadHistory, download_id)
+            if entry is not None:
+                entry.status = "failed"
+                entry.error_message = str(exception)
+                session.commit()
 
-        if save_to_server:
-            _ = (DOWNLOADS_DIR / filename).write_bytes(file_obj.getvalue())
-            _ = file_obj.seek(0)
 
-        if download_to_client:
-            logger.info(f"Sending EPUB: {filename}")
-            return send_file(
-                file_obj,
-                download_name=filename,
-                mimetype=mimetype,
-                as_attachment=True,
-            )
+@app.route("/epub/status/<int:download_id>", methods=["GET"])
+def download_status(download_id: int) -> Response:
+    """Return the current status of a download job.
 
-    return redirect("/")
+    Args:
+        download_id (int): The DownloadHistory row ID.
+
+    Returns:
+        Response: JSON with status, output filename and error message (if any).
+
+    """
+    with get_session() as session:
+        entry = session.get(DownloadHistory, download_id)
+        if entry is None:
+            error_msg = "Download entry not found"
+            raise TerminateRequestError(error_msg, 404)
+
+        return jsonify(
+            {
+                "download_id": entry.id,
+                "status": entry.status,
+                "title": entry.title,
+                "output_filenames": entry.output_filenames,
+                "error_message": entry.error_message,
+            },
+        )
 
 
 @app.route("/epub/download/<int:download_id>", methods=["GET"])

@@ -12,7 +12,7 @@ class Base(DeclarativeBase):
 
 
 class DownloadHistory(Base):
-    """Tracks every EPUB generation with series info and destination flags."""
+    """Tracks every EPUB generation with series info and job status."""
 
     __tablename__ = "download_history"
 
@@ -23,4 +23,6 @@ class DownloadHistory(Base):
     output_filenames: Mapped[str]
     saved_to_server: Mapped[bool]
     downloaded_to_client: Mapped[bool]
+    status: Mapped[str] = mapped_column(default="completed")
+    error_message: Mapped[str | None] = mapped_column(nullable=True)
     created_at: Mapped[datetime] = mapped_column(default=lambda: datetime.now(UTC))

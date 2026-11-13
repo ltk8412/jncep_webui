@@ -239,6 +239,43 @@ fieldset {
   background: #1976d2;
 }
 
+.job-status {
+  margin-top: 10px;
+  min-height: 18px;
+  font-size: 13px;
+  color: #90caf9;
+}
+
+#history-table .status-cell {
+  white-space: nowrap;
+}
+
+.badge {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 3px;
+  font-size: 11px;
+  color: #fff;
+}
+
+.badge-completed {
+  background: #2e7d32;
+}
+
+.badge-failed {
+  background: #c62828;
+}
+
+.badge-running {
+  background: #e65100;
+  animation: pulse 1.5s ease-in-out infinite;
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.5; }
+}
+
 .delete-btn {
   cursor: pointer;
   border: none;

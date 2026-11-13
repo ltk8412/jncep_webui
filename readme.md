@@ -110,7 +110,7 @@ JNCEP WebUI uses jncep to create the epub. If you want to know more about how th
 2. (Optional) Specify the **Prepub Parts**.
 3. Click **Submit** to generate the EPUB.
 
-If the parts span multiple volumes, each volume will be compiled into a separate EPUB, and all files will be bundled into a ZIP. The generated file will be served for download, typically within a few seconds.
+The download runs in the background so the server never blocks. The job appears in **Download History** with a status badge (running → done/failed); once complete, use the **Download** button on the row to fetch the file, or tick *"Download to my computer when ready"* before submitting to have the file sent to your browser automatically on completion. If the parts span multiple volumes, each volume is compiled into a separate EPUB and all files are bundled into a ZIP.
 
 ---
 
@@ -136,7 +136,23 @@ If the parts span multiple volumes, each volume will be compiled into a separate
   http://localhost:5000/epub?jnovelclub_url=<series_url>
   ```
 
-The response will include the generated EPUB or ZIP file.
+Requests are **non-blocking**: the response is an immediate `202 Accepted` JSON with the job ID, and generation happens in the background on the server:
+
+```json
+{ "download_id": 1, "status": "running" }
+```
+
+Poll the job until it finishes:
+
+- `GET http://<host>:5000/epub/status/<id>` → `{"download_id": 1, "status": "completed", "title": "...", "output_filenames": "....epub", "error_message": null}` (`status` is one of `running`, `completed`, `failed`)
+
+Download the finished file (EPUB or ZIP) from the server:
+
+- `GET http://<host>:5000/epub/download/<id>`
+
+Delete an entry and its server-side file:
+
+- `POST http://<host>:5000/epub/delete/<id>`
 
 ---
 
