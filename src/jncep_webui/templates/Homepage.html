@@ -18,6 +18,17 @@
                         <label for="JNC_PARTS">Prepub parts:</label>
                         <input id="JNC_PARTS" placeholder="4.1:4.2" name="prepub_parts" type="text" tabindex="1" autofocus>
 					</fieldset>
+					<fieldset class="destination-group">
+						<legend>Download destination:</legend>
+						<label>
+							<input type="checkbox" name="save_to_server" checked>
+							Save to server (/downloads)
+						</label>
+						<label>
+							<input type="checkbox" name="download_to_client">
+							Download to my computer
+						</label>
+					</fieldset>
 					<fieldset>
 						<div style="text-align:center;">
 							<button name="submit" type="submit" id="FormSubmit" data-submit="...Sending">Submit</button>
@@ -33,6 +44,46 @@
                     </footer>
 				</form>
 			</div>
+
+			{% if history %}
+			<div id="history-section">
+				<h3>Download History</h3>
+				<table id="history-table">
+					<thead>
+						<tr>
+							<th>Title</th>
+							<th>Series URL</th>
+							<th>Parts</th>
+							<th>Output</th>
+							<th>Server</th>
+							<th>Date</th>
+							<th></th>
+						</tr>
+					</thead>
+					<tbody>
+					{% for entry in history %}
+						<tr>
+							<td class="title-cell">{{ entry.title }}</td>
+							<td class="url-cell">
+								<span class="url-text">{{ entry.jnovelclub_url }}</span>
+								<button class="copy-btn" data-url="{{ entry.jnovelclub_url }}" onclick="navigator.clipboard.writeText(this.dataset.url)">Copy</button>
+							</td>
+							<td>{{ entry.prepub_parts or "—" }}</td>
+							<td class="output-cell">{{ entry.output_filenames }}</td>
+							<td>{{ "✓" if entry.saved_to_server else "—" }}</td>
+							<td>{{ entry.created_at.strftime("%Y-%m-%d %H:%M") }}</td>
+							<td class="actions-cell">
+								<button class="fill-btn" data-url="{{ entry.jnovelclub_url }}" data-parts="{{ entry.prepub_parts or '' }}" onclick="document.getElementById('JNC_URL').value=this.dataset.url;document.getElementById('JNC_PARTS').value=this.dataset.parts">Fill</button>
+								<form action="/epub/delete/{{ entry.id }}" method="POST" style="display:inline;">
+									<button type="submit" class="delete-btn" onclick="return confirm('Delete this entry and its file?')">Delete</button>
+								</form>
+							</td>
+						</tr>
+					{% endfor %}
+					</tbody>
+				</table>
+			</div>
+			{% endif %}
 		</div>
 	</body>
 </html>

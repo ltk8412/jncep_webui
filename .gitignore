@@ -1,6 +1,15 @@
 /ARCHIVE/
 /.idea/
+/data/
+/downloads/
 /logs/
 /venv/
 /dev/
 /dist/
+
+
+__pycache__
+
+.env
+
+docker-compose.yml

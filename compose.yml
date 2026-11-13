@@ -13,4 +13,6 @@ services:
       - "5000:5000"
     volumes:
       - ./logs:/logs
+      - ./data:/data
+      - ./downloads:/downloads
     restart: unless-stopped
