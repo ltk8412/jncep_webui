@@ -1,11 +1,9 @@
-"""SQLAlchemy database setup — SQLite at /data/jncep_history.db."""
-
-from pathlib import Path
+"""SQLAlchemy database setup — SQLite at the resolved data directory."""
 
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
 
-DB_PATH = Path("/data/jncep_history.db")
+from jncep_webui.paths import DB_PATH
 
 engine = create_engine(f"sqlite:///{DB_PATH}")
 

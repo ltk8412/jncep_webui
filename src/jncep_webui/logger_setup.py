@@ -6,6 +6,8 @@ from typing import TYPE_CHECKING, cast, override
 
 from loguru import logger
 
+from jncep_webui.paths import LOGS_DIR
+
 if TYPE_CHECKING:
     from types import FrameType
 
@@ -40,7 +42,7 @@ def setup_logging() -> None:
         level="INFO",
     )
     _ = logger.add(
-        "/logs/jncep.log",
+        str(LOGS_DIR / "jncep.log"),
         level="DEBUG",
         format="{time:YYYY-MM-DD HH:mm:ss} | {level} | {message}",
         rotation="50 MB",

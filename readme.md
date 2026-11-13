@@ -34,6 +34,11 @@ To set up JNCEP WebUI, you have two installation options: **native installation*
 |-------------------|--------------|----------------------------------------------------------------------------------|
 | `JNCEP_EMAIL`     | Yes          | Your J-Novel Club account login email.                                           |
 | `JNCEP_PASSWORD`  | Yes          | Your J-Novel Club account login password.                                        |
+| `JNCEP_DATA_DIR`  | No           | Directory for the SQLite history DB. Defaults to `/data` (in Docker).            |
+| `JNCEP_DOWNLOADS_DIR` | No       | Directory for EPUB/ZIP files saved to the server. Defaults to `/downloads` (in Docker). |
+| `JNCEP_LOGS_DIR`  | No           | Directory for log files. Defaults to `/logs` (in Docker).                        |
+
+When the default directories don't exist (e.g. running locally via `uv run` instead of Docker), the app automatically falls back to `./data`, `./downloads` and `./logs` in the current working directory.
 
 ---
 

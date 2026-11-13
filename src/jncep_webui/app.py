@@ -3,6 +3,7 @@
 This application logs into J-Novel Club and downloads specific volumes or series parts as EPUB files,
 which are then sent to the client device.
 """
+
 import os
 import re
 import signal
@@ -37,6 +38,7 @@ from waitress import serve
 from jncep_webui.database import get_session, init_db
 from jncep_webui.logger_setup import setup_logging
 from jncep_webui.models import DownloadHistory
+from jncep_webui.paths import DOWNLOADS_DIR
 
 # TODO(naruzosa): Make test cases
 # https://github.com/NaruZosa/jncep_webui/issues/2
@@ -46,7 +48,9 @@ from jncep_webui.models import DownloadHistory
 # https://github.com/NaruZosa/jncep_webui/issues/4
 
 
-JNC_URL_PATTERN = re.compile(r"^https://j-novel\.club/(read|series)/[a-z0-9-]+", re.IGNORECASE)
+JNC_URL_PATTERN = re.compile(
+    r"^https://j-novel\.club/(read|series)/[a-z0-9-]+", re.IGNORECASE,
+)
 
 
 @dataclass
@@ -188,7 +192,9 @@ def prepare_epub_download(directory: Path) -> tuple[BytesIO, str, str]:
     return memory_file, zip_filename, "application/zip"
 
 
-def _validate_credentials_pair(email: str | None, password: str | None, context: str) -> JNCUser | None:
+def _validate_credentials_pair(
+    email: str | None, password: str | None, context: str,
+) -> JNCUser | None:
     """Validate email/password pair consistency.
 
     Args:
@@ -264,6 +270,7 @@ def terminate(signum: int, frame: types.FrameType | None) -> Never:
 
 # Application routes and entry point for the WSGI server
 
+
 @app.route("/health", methods=["GET"])
 def health_check() -> Response:
     """Healthcheck endpoint for uptime monitoring."""
@@ -284,7 +291,11 @@ def homepage() -> str:
     """
     logger.info(f"Homepage requested by {request.remote_addr}")
     with get_session() as session:
-        history = session.query(DownloadHistory).order_by(DownloadHistory.created_at.desc()).all()
+        history = (
+            session.query(DownloadHistory)
+            .order_by(DownloadHistory.created_at.desc())
+            .all()
+        )
     return render_template("Homepage.html", history=history)
 
 
@@ -295,7 +306,7 @@ def download_epub() -> Response:
     Query params:
         jnovelclub_url (str): J-Novel Club series/volume/part URL.
         prepub_parts (str, optional): Part range specifier.
-        save_to_server (str, optional): "on" to save to /downloads/ (default: on).
+        save_to_server (str, optional): "on" to save to the server's downloads directory (default: on).
         download_to_client (str, optional): "on" to send file to browser (default: off).
 
     Returns:
@@ -305,10 +316,14 @@ def download_epub() -> Response:
     logger.info(f"EPUB request initiated by {request.remote_addr}")
 
     try:
-        jnc_form_data = JNovelFormData(request.args["jnovelclub_url"], request.args.get("prepub_parts", ""))
+        jnc_form_data = JNovelFormData(
+            request.args["jnovelclub_url"], request.args.get("prepub_parts", ""),
+        )
     except KeyError as exception:
         logger.exception("jnovelclub_url is missing from the request")
-        raise TerminateRequestError(message="jnovelclub_url is missing from the request", status_code=500) from exception
+        raise TerminateRequestError(
+            message="jnovelclub_url is missing from the request", status_code=500,
+        ) from exception
 
     jnc_user = get_credentials(request.args)
     save_to_server = request.args.get("save_to_server", "on") == "on"
@@ -327,20 +342,20 @@ def download_epub() -> Response:
         title = Path(filename).stem.split("_Volume_")[0]
 
         with get_session() as session:
-            session.add(DownloadHistory(
-                title=title,
-                jnovelclub_url=jnc_form_data.jnovelclub_url,
-                prepub_parts=jnc_form_data.prepub_parts,
-                output_filenames=filename,
-                saved_to_server=save_to_server,
-                downloaded_to_client=download_to_client,
-            ))
+            session.add(
+                DownloadHistory(
+                    title=title,
+                    jnovelclub_url=jnc_form_data.jnovelclub_url,
+                    prepub_parts=jnc_form_data.prepub_parts,
+                    output_filenames=filename,
+                    saved_to_server=save_to_server,
+                    downloaded_to_client=download_to_client,
+                ),
+            )
             session.commit()
 
         if save_to_server:
-            server_dir = Path("/downloads")
-            _ = server_dir.mkdir(parents=True, exist_ok=True)
-            _ = (server_dir / filename).write_bytes(file_obj.getvalue())
+            _ = (DOWNLOADS_DIR / filename).write_bytes(file_obj.getvalue())
             _ = file_obj.seek(0)
 
         if download_to_client:
@@ -376,12 +391,14 @@ def download_from_server(download_id: int) -> Response:
             error_msg = "Entry was not saved to the server"
             raise TerminateRequestError(error_msg, 404)
 
-        file_path = Path("/downloads") / entry.output_filenames
+        file_path = DOWNLOADS_DIR / entry.output_filenames
         if not file_path.exists():
             error_msg = "File not found on server"
             raise TerminateRequestError(error_msg, 404)
 
-        mimetype = "application/zip" if file_path.suffix == ".zip" else "application/epub+zip"
+        mimetype = (
+            "application/zip" if file_path.suffix == ".zip" else "application/epub+zip"
+        )
         logger.info(f"Sending saved file from server: {entry.output_filenames}")
         return send_file(
             file_path,
@@ -409,7 +426,7 @@ def delete_download(download_id: int) -> Response:
             raise TerminateRequestError(error_msg, 404)
 
         if entry.saved_to_server:
-            file_path = Path("/downloads") / entry.output_filenames
+            file_path = DOWNLOADS_DIR / entry.output_filenames
             if file_path.exists():
                 file_path.unlink()
 
